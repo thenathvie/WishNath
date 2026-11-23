@@ -86,7 +86,7 @@ function login() {
   const id = h('input', { placeholder: 'Identifiant ou e-mail', autocomplete: 'username' });
   const pw = h('input', { type: 'password', placeholder: 'Mot de passe', autocomplete: 'current-password' });
   const err = h('p', { class: 'err' });
-  const go = async () => { try { await signInWithEmailAndPassword(auth, toEmail(id.value), pw.value); } catch { err.textContent = 'Identifiants incorrects.'; } };
+  const go = async () => { try { await signInWithEmailAndPassword(auth, toEmail(id.value), pw.value); } catch (e) { console.error(e); err.textContent = ({'auth/invalid-credential':'Identifiants incorrects.','auth/invalid-email':'Adresse e-mail invalide.','auth/too-many-requests':'Trop de tentatives, réessaie plus tard.'})[e.code] || ('Erreur Firebase : ' + (e.code || e.message)); } };
   pw.addEventListener('keydown', e => e.key === 'Enter' && go());
   root.replaceChildren(h('main', { class: 'card' }, h('h1', {}, 'WishNath'),
     h('p', {}, 'Tout ce qui me ferait plaisir, au même endroit.'), id, pw, h('button', { onclick: go }, 'Se connecter'), err));
