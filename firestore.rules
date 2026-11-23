@@ -1,0 +1,170 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WishNath — règles de sécurité Firestore
+//
+// Principe : Firestore ne sait pas masquer un champ dans un document. Les
+// données sensibles sont donc séparées dans des collections distinctes :
+//
+//   users/{uid}            profil + rôle (lecture : soi-même ou admin)
+//   gifts/{id}             partie PUBLIQUE d'un cadeau, lisible uniquement par
+//                          les personnes listées dans visibleTo (et l'admin)
+//   giftsPrivate/{id}      prix : admin uniquement
+//   reservations/{id}      qui a réservé : l'auteur de la réservation + admin
+//
+// Un compte n'a aucun droit tant que son document users/{uid} n'existe pas et
+// n'a pas active == true : une inscription "sauvage" via l'API ne donne rien.
+// ─────────────────────────────────────────────────────────────────────────────
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ───── Helpers ─────────────────────────────────────────────────────────
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function myProfilePath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function hasProfile() {
+      return signedIn() && exists(myProfilePath());
+    }
+
+    function isActive() {
+      return hasProfile() && get(myProfilePath()).data.active == true;
+    }
+
+    function isAdmin() {
+      return isActive() && get(myProfilePath()).data.role == 'admin';
+    }
+
+    function giftPath(id) {
+      return /databases/$(database)/documents/gifts/$(id);
+    }
+
+    function reservationPath(id) {
+      return /databases/$(database)/documents/reservations/$(id);
+    }
+
+    // ───── Validation des données écrites par l'admin ──────────────────────
+    function validUser(uid) {
+      let d = request.resource.data;
+      return d.keys().hasAll(['name', 'role', 'active'])
+        && d.name is string && d.name.size() > 0 && d.name.size() <= 60
+        && d.role in ['admin', 'user']
+        && d.active is bool
+        && d.get('uid', uid) == uid;
+    }
+
+    function validGift() {
+      let d = request.resource.data;
+      return d.keys().hasAll(['title', 'status', 'visibleTo'])
+        && d.title is string && d.title.size() > 0 && d.title.size() <= 120
+        && d.status in ['available', 'reserved', 'purchased']
+        && d.visibleTo is list && d.visibleTo.size() <= 200
+        && (!('description' in d) || (d.description is string && d.description.size() <= 2000))
+        && (!('purchaseLink' in d) || d.purchaseLink == null || (d.purchaseLink is string && d.purchaseLink.size() <= 1000))
+        && (!('image' in d) || d.image == null || (d.image is string && d.image.size() <= 1000))
+        && (!('priority' in d) || d.priority == null || d.priority in ['low', 'medium', 'high']);
+    }
+
+    // ───── Ce qu'un utilisateur (non admin) a le droit de faire ────────────
+    // Il ne peut modifier QUE le champ "status", et seulement pour :
+    //   - réserver      available -> reserved   (en créant sa réservation)
+    //   - annuler       reserved/purchased -> available (en la supprimant)
+    //   - marquer acheté / remettre en réservé (sur SA réservation)
+    function ownsReservation(id) {
+      return exists(reservationPath(id))
+        && get(reservationPath(id)).data.uid == request.auth.uid;
+    }
+
+    function onlyStatusChanges() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
+    }
+
+    function canReserve(id) {
+      return resource.data.status == 'available'
+        && request.resource.data.status == 'reserved'
+        && !exists(reservationPath(id))
+        && existsAfter(reservationPath(id))
+        && getAfter(reservationPath(id)).data.uid == request.auth.uid;
+    }
+
+    function canCancel(id) {
+      return resource.data.status in ['reserved', 'purchased']
+        && request.resource.data.status == 'available'
+        && ownsReservation(id)
+        && !existsAfter(reservationPath(id));
+    }
+
+    function canMarkPurchased(id) {
+      return resource.data.status == 'reserved'
+        && request.resource.data.status == 'purchased'
+        && ownsReservation(id);
+    }
+
+    function canUnmarkPurchased(id) {
+      return resource.data.status == 'purchased'
+        && request.resource.data.status == 'reserved'
+        && ownsReservation(id);
+    }
+
+    // ───── users ───────────────────────────────────────────────────────────
+    match /users/{uid} {
+      // Chacun peut lire son propre profil (même désactivé, pour afficher
+      // un message clair) ; l'admin lit tout.
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      // Personne d'autre que l'admin ne peut écrire (donc pas d'auto-promotion).
+      allow create, update: if isAdmin() && validUser(uid);
+      allow delete: if isAdmin();
+    }
+
+    // ───── gifts (partie visible par les destinataires) ────────────────────
+    match /gifts/{giftId} {
+      allow read: if isAdmin()
+        || (isActive() && request.auth.uid in resource.data.visibleTo);
+
+      allow create, update: if isAdmin() && validGift();
+      allow delete: if isAdmin();
+
+      allow update: if isActive()
+        && request.auth.uid in resource.data.visibleTo
+        && onlyStatusChanges()
+        && (canReserve(giftId)
+            || canCancel(giftId)
+            || canMarkPurchased(giftId)
+            || canUnmarkPurchased(giftId));
+    }
+
+    // ───── giftsPrivate (prix) : admin uniquement ──────────────────────────
+    match /giftsPrivate/{giftId} {
+      allow read, write: if isAdmin();
+    }
+
+    // ───── reservations (identité du réservant) ────────────────────────────
+    match /reservations/{giftId} {
+      allow read: if isAdmin()
+        || (isActive() && resource.data.uid == request.auth.uid);
+
+      allow create, update, delete: if isAdmin();
+
+      allow create: if isActive()
+        && request.resource.data.keys().hasOnly(['uid', 'reservedAt'])
+        && request.resource.data.uid == request.auth.uid
+        && request.auth.uid in get(giftPath(giftId)).data.visibleTo
+        && get(giftPath(giftId)).data.status == 'available'
+        && getAfter(giftPath(giftId)).data.status == 'reserved';
+
+      allow delete: if isActive()
+        && resource.data.uid == request.auth.uid
+        && getAfter(giftPath(giftId)).data.status == 'available';
+    }
+
+    // Tout le reste est interdit.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
