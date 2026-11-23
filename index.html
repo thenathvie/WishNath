@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="robots" content="noindex, nofollow" />
+<meta name="referrer" content="no-referrer" />
+<meta name="theme-color" content="#0e2b24" />
+<title>WishNath</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M9 2h14l6 6v22H3V8z' fill='%2314513f'/%3E%3Ccircle cx='16' cy='9' r='2.6' fill='%23d4a12a'/%3E%3Cpath d='M16 14v14' stroke='%23c21a41' stroke-width='3'/%3E%3C/svg%3E" />
+<style>
+:root{--g:#14513f;--d:#0e2b24;--o:#d4a12a;--r:#c21a41;--bg:#f6f3ec;--t:#1c2623}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--t)}
+header{display:flex;gap:12px;align-items:center;background:var(--d);color:#fff;padding:10px 16px;flex-wrap:wrap}
+header b{font-size:1.2rem;color:var(--o);margin-right:auto}
+main{max-width:860px;margin:0 auto;padding:16px}
+.card{max-width:380px;margin:12vh auto;padding:24px;background:#fff;border-radius:12px;box-shadow:0 4px 20px #0002;display:flex;flex-direction:column;gap:10px}
+h1,h2,h3{margin:.3em 0}h1{color:var(--g)}
+input,select,textarea{width:100%;padding:9px;border:1px solid #bbb;border-radius:8px;font:inherit;background:#fff}
+button{padding:8px 14px;border:0;border-radius:8px;background:var(--g);color:#fff;font:inherit;cursor:pointer}
+button.ghost{background:#fff;color:var(--g);border:1px solid var(--g)}
+button.red{background:var(--r)}
+header button.ghost{background:none;color:#fff;border-color:#fff8}
+.gift{background:#fff;border-radius:12px;padding:14px;margin:12px 0;box-shadow:0 2px 8px #0001;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.gift img{max-width:100%;max-height:220px;border-radius:8px}
+.tag{display:inline-block;padding:2px 10px;border-radius:99px;background:var(--o);color:#222;font-size:.85rem}
+.err{color:var(--r);margin:0}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.tabs{display:flex;gap:8px;margin-bottom:8px}.tabs .on{background:var(--d)}
+form.f{display:flex;flex-direction:column;gap:8px;background:#fff;padding:14px;border-radius:12px;margin:12px 0}
+label.c{display:inline-flex;gap:4px;align-items:center;margin-right:10px;width:auto}label.c input{width:auto}
+small{color:#555}
+</style>
+</head>
+<body>
+<div id="app"><p style="padding:20px">Chargement…</p></div>
+<noscript>WishNath a besoin de JavaScript pour fonctionner.</noscript>
+<script type="module">
+import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js';
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, createUserWithEmailAndPassword, sendPasswordResetEmail }
+  from 'https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js';
+import { getFirestore, doc, getDoc, collection, query, where, onSnapshot, writeBatch, setDoc, updateDoc, serverTimestamp }
+  from 'https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js';
+
+/* ⚠️ À REMPLIR : Console Firebase → Paramètres du projet → Vos applications → Configuration Web */
+const firebaseConfig = {
+  apiKey: 'COLLE_TA_CLE_API_ICI',
+  authDomain: 'wishnath-20ba4.firebaseapp.com',
+  projectId: 'wishnath-20ba4',
+  appId: 'COLLE_TON_APP_ID_ICI',
+};
+const DOMAIN = 'wishnath.local'; // un identifiant « maman » devient maman@wishnath.local
+
+const app = initializeApp(firebaseConfig), auth = getAuth(app), db = getFirestore(app);
+const root = document.getElementById('app');
+const h = (t, a = {}, ...k) => {
+  const e = document.createElement(t);
+  for (const [x, v] of Object.entries(a)) {
+    if (x.startsWith('on')) e.addEventListener(x.slice(2), v);
+    else if (x === 'class') e.className = v;
+    else if (v !== false && v != null) e[x] = v;
+  }
+  e.append(...k.flat().filter(c => c != null && c !== false));
+  return e;
+};
+const toEmail = v => { v = v.trim().toLowerCase(); return v.includes('@') ? v : v + '@' + DOMAIN; };
+const safeUrl = u => (/^https?:\/\//i.test(u || '') ? u : null);
+const run = async f => { try { await f(); } catch (e) { alert('Action refusée (' + (e.code || e.message) + ')'); } };
+const shell = (p, ...k) => root.replaceChildren(
+  h('header', {}, h('b', {}, 'WishNath'), h('span', {}, p.name), h('button', { class: 'ghost', onclick: () => signOut(auth) }, 'Déconnexion')),
+  h('main', {}, ...k));
+let unsubs = [];
+const listen = (q, f) => unsubs.push(onSnapshot(q, f, e => console.error(e)));
+const rows = s => s.docs.map(d => ({ id: d.id, ...d.data() }));
+
+onAuthStateChanged(auth, async u => {
+  unsubs.forEach(f => f()); unsubs = [];
+  if (!u) return login();
+  let p = null;
+  try { const s = await getDoc(doc(db, 'users', u.uid)); p = s.exists() ? s.data() : null; } catch {}
+  if (!p || !p.active) return blocked();
+  p.role === 'admin' ? admin(u, p) : wishlist(u, p);
+});
+
+function login() {
+  const id = h('input', { placeholder: 'Identifiant ou e-mail', autocomplete: 'username' });
+  const pw = h('input', { type: 'password', placeholder: 'Mot de passe', autocomplete: 'current-password' });
+  const err = h('p', { class: 'err' });
+  const go = async () => { try { await signInWithEmailAndPassword(auth, toEmail(id.value), pw.value); } catch { err.textContent = 'Identifiants incorrects.'; } };
+  pw.addEventListener('keydown', e => e.key === 'Enter' && go());
+  root.replaceChildren(h('main', { class: 'card' }, h('h1', {}, 'WishNath'),
+    h('p', {}, 'Tout ce qui me ferait plaisir, au même endroit.'), id, pw, h('button', { onclick: go }, 'Se connecter'), err));
+}
+
+function blocked() {
+  root.replaceChildren(h('main', { class: 'card' }, h('h2', {}, 'Compte indisponible'),
+    h('p', {}, "Ton compte n'est pas (ou plus) activé. Contacte la personne qui t'a donné l'accès."),
+    h('button', { onclick: () => signOut(auth) }, 'Retour')));
+}
+
+/* ───────────── Côté proche ───────────── */
+function wishlist(u, p) {
+  let gifts = [], mine = new Set();
+  const gref = g => doc(db, 'gifts', g.id), rref = g => doc(db, 'reservations', g.id);
+  const reserve = g => run(() => { const b = writeBatch(db); b.update(gref(g), { status: 'reserved' });
+    b.set(rref(g), { uid: u.uid, reservedAt: serverTimestamp() }); return b.commit(); });
+  const cancel = g => run(() => { const b = writeBatch(db); b.update(gref(g), { status: 'available' }); b.delete(rref(g)); return b.commit(); });
+  const setSt = (g, s) => run(() => updateDoc(gref(g), { status: s }));
+  const card = g => {
+    const mm = mine.has(g.id), link = safeUrl(g.purchaseLink), img = safeUrl(g.image);
+    return h('article', { class: 'gift' },
+      img && h('img', { src: img, alt: '' }), h('h3', {}, g.title),
+      g.priority === 'high' && h('span', { class: 'tag' }, 'Prioritaire'),
+      g.description && h('p', {}, g.description),
+      link && h('a', { href: link, target: '_blank', rel: 'noopener noreferrer' }, "Voir le lien d'achat"),
+      g.status === 'available' ? h('button', { onclick: () => reserve(g) }, 'Je le réserve')
+        : mm ? h('div', { class: 'row' }, h('span', { class: 'tag' }, g.status === 'purchased' ? 'Acheté par moi' : 'Réservé par moi'),
+            g.status === 'reserved' && h('button', { onclick: () => setSt(g, 'purchased') }, "Je l'ai acheté"),
+            g.status === 'purchased' && h('button', { class: 'ghost', onclick: () => setSt(g, 'reserved') }, 'Pas encore acheté'),
+            h('button', { class: 'ghost', onclick: () => cancel(g) }, 'Annuler'))
+        : h('span', { class: 'tag' }, 'Déjà réservé'));
+  };
+  const draw = () => shell(p, h('h2', {}, 'Les idées cadeaux pour toi'), gifts.length ? gifts.map(card) : h('p', {}, 'Rien pour le moment.'));
+  listen(query(collection(db, 'gifts'), where('visibleTo', 'array-contains', u.uid)),
+    s => { gifts = rows(s).sort((a, b) => a.title.localeCompare(b.title)); draw(); });
+  listen(query(collection(db, 'reservations'), where('uid', '==', u.uid)),
+    s => { mine = new Set(s.docs.map(d => d.id)); draw(); });
+  draw();
+}
+
+/* ───────────── Côté admin ───────────── */
+function admin(u, p) {
+  let users = [], gifts = [], priv = {}, res = {}, tab = 'gifts', editing = null;
+  const uname = id => (users.find(x => x.id === id) || {}).name || '?';
+  const draw = () => {
+    if (editing) return;
+    const t = (k, l) => h('button', { class: tab === k ? 'on' : 'ghost', onclick: () => { tab = k; draw(); } }, l);
+    shell(p, h('div', { class: 'tabs' }, t('gifts', 'Cadeaux'), t('users', 'Personnes')), tab === 'gifts' ? giftsView() : usersView());
+  };
+  const edit = v => { editing = v; if (v) shell(p, giftForm(v === 'new' ? null : v)); else draw(); };
+
+  function giftsView() {
+    return h('div', {}, h('button', { onclick: () => edit('new') }, '+ Nouveau cadeau'),
+      gifts.sort((a, b) => a.title.localeCompare(b.title)).map(g => h('article', { class: 'gift' },
+        h('h3', {}, g.title),
+        h('small', {}, 'Statut : ' + g.status + (res[g.id] ? ' · par ' + uname(res[g.id].uid) : '') +
+          ' · Prix : ' + (priv[g.id]?.price ?? '—') + ' €'),
+        h('small', {}, 'Vu par : ' + ((g.visibleTo || []).map(uname).join(', ') || 'personne')),
+        h('div', { class: 'row' },
+          h('button', { class: 'ghost', onclick: () => edit(g) }, 'Modifier'),
+          g.status !== 'available' && h('button', { class: 'ghost', onclick: () => run(() => {
+            const b = writeBatch(db); b.update(doc(db, 'gifts', g.id), { status: 'available' }); b.delete(doc(db, 'reservations', g.id)); return b.commit(); }) }, 'Libérer'),
+          h('button', { class: 'red', onclick: () => confirm('Supprimer « ' + g.title + ' » ?') && run(() => {
+            const b = writeBatch(db); ['gifts', 'giftsPrivate', 'reservations'].forEach(c => b.delete(doc(db, c, g.id))); return b.commit(); }) }, 'Supprimer')))));
+  }
+
+  function giftForm(g) {
+    const f = {
+      title: h('input', { placeholder: 'Titre', value: g?.title || '' }),
+      desc: h('textarea', { placeholder: 'Description', rows: 3, value: g?.description || '' }),
+      link: h('input', { placeholder: "Lien d'achat (https://…)", value: g?.purchaseLink || '' }),
+      img: h('input', { placeholder: "URL de l'image (https://…)", value: g?.image || '' }),
+      prio: h('select', {}, ...[['', 'Priorité : aucune'], ['low', 'Basse'], ['medium', 'Moyenne'], ['high', 'Haute']]
+        .map(([v, l]) => h('option', { value: v, selected: (g?.priority || '') === v }, l))),
+      price: h('input', { type: 'number', step: '0.01', placeholder: 'Prix (visible par toi seul)', value: priv[g?.id]?.price ?? '' }),
+    };
+    const checks = users.map(x => h('input', { type: 'checkbox', value: x.id, checked: (g?.visibleTo || []).includes(x.id) }));
+    const save = () => run(async () => {
+      if (!f.title.value.trim()) throw new Error('titre requis');
+      const id = g?.id || doc(collection(db, 'gifts')).id, now = serverTimestamp(), b = writeBatch(db);
+      b.set(doc(db, 'gifts', id), {
+        title: f.title.value.trim(), description: f.desc.value.trim(), purchaseLink: f.link.value.trim() || null,
+        image: f.img.value.trim() || null, priority: f.prio.value || null, status: g?.status || 'available',
+        visibleTo: checks.filter(c => c.checked).map(c => c.value), createdAt: g?.createdAt || now, updatedAt: now });
+      b.set(doc(db, 'giftsPrivate', id), { price: f.price.value === '' ? null : Number(f.price.value), updatedAt: now });
+      await b.commit(); edit(null);
+    });
+    return h('form', { class: 'f', onsubmit: e => e.preventDefault() }, h('h2', {}, g ? 'Modifier' : 'Nouveau cadeau'),
+      f.title, f.desc, f.link, f.img, f.prio, f.price, h('b', {}, 'Qui peut le voir ?'),
+      h('div', {}, users.map((x, i) => h('label', { class: 'c' }, checks[i], x.name))),
+      h('div', { class: 'row' }, h('button', { onclick: save }, 'Enregistrer'), h('button', { class: 'ghost', onclick: () => edit(null) }, 'Annuler')));
+  }
+
+  function usersView() {
+    const name = h('input', { placeholder: 'Prénom' }), id = h('input', { placeholder: 'Identifiant (ex : maman) ou e-mail réel' });
+    const out = h('p', {});
+    const add = () => run(async () => {
+      if (!name.value.trim() || !id.value.trim()) throw new Error('champs requis');
+      const a = new Uint32Array(12); crypto.getRandomValues(a);
+      const pw = [...a].map(n => 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'[n % 54]).join('');
+      const sec = initializeApp(firebaseConfig, 'sec' + Date.now()), sa = getAuth(sec), email = toEmail(id.value);
+      let uid; try { uid = (await createUserWithEmailAndPassword(sa, email, pw)).user.uid; await signOut(sa); } finally { await deleteApp(sec); }
+      await setDoc(doc(db, 'users', uid), { uid, name: name.value.trim(), username: id.value.trim(), email, role: 'user', active: true, createdAt: serverTimestamp() });
+      out.textContent = 'Compte créé. Identifiant : ' + id.value.trim() + ' · Mot de passe (à copier maintenant) : ' + pw;
+      name.value = id.value = '';
+    });
+    return h('div', {}, h('form', { class: 'f', onsubmit: e => e.preventDefault() }, h('h2', {}, 'Nouvelle personne'), name, id,
+        h('button', { onclick: add }, 'Créer le compte'), out),
+      users.map(x => h('article', { class: 'gift' }, h('h3', {}, x.name + (x.role === 'admin' ? ' (admin)' : '')),
+        h('small', {}, x.email + (x.active ? '' : ' · désactivé')),
+        x.id !== u.uid && h('div', { class: 'row' },
+          h('button', { class: 'ghost', onclick: () => run(() => updateDoc(doc(db, 'users', x.id), { active: !x.active })) }, x.active ? 'Désactiver' : 'Réactiver'),
+          !x.email.endsWith('@' + DOMAIN) && h('button', { class: 'ghost', onclick: () => run(async () => { await sendPasswordResetEmail(auth, x.email); alert('E-mail envoyé.'); }) }, 'Nouveau mot de passe par e-mail')))));
+  }
+
+  listen(collection(db, 'users'), s => { users = rows(s).sort((a, b) => a.name.localeCompare(b.name)); draw(); });
+  listen(collection(db, 'gifts'), s => { gifts = rows(s); draw(); });
+  listen(collection(db, 'giftsPrivate'), s => { priv = Object.fromEntries(rows(s).map(r => [r.id, r])); draw(); });
+  listen(collection(db, 'reservations'), s => { res = Object.fromEntries(rows(s).map(r => [r.id, r])); draw(); });
+  draw();
+}
+</script>
+</body>
+</html>
