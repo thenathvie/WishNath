@@ -1077,6 +1077,34 @@ code {
     text-overflow: ellipsis;
   }
 }
+.tag-linkrow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+}
+.tag-linkrow .tag-link {
+  min-width: 0;
+}
+.tag-price {
+  margin-left: auto;
+  font-family: var(--font-display);
+  font-stretch: 85%;
+  font-weight: 800;
+  font-size: 1.6rem;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  color: var(--pine-deep);
+  white-space: nowrap;
+}
+.tag-price--none {
+  font-family: var(--font-body);
+  font-stretch: 100%;
+  font-weight: 500;
+  font-size: 0.875rem;
+  letter-spacing: 0;
+  color: var(--ink-3);
+}
 
 /* src/styles/admin.css */
 .wrap--admin {
@@ -1491,6 +1519,18 @@ code {
     width: 100%;
   }
 }
+.note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 20px;
+  padding: 10px 16px;
+  border-radius: var(--r-md);
+  background: var(--pine-soft);
+  color: var(--pine-deep);
+  font-weight: 500;
+  font-size: 0.9375rem;
+}
 
 /* src/styles/app.css */
 
@@ -1608,8 +1648,10 @@ var PRIORITY = {
 };
 var ROLES = {
   user: "Proche",
+  editor: "Gestionnaire (mode surprise)",
   admin: "Administrateur"
 };
+var MANAGER_ROLES = ["admin", "editor"];
 
 // src/services/auth.js
 function identifierToEmail(identifier) {
@@ -1695,13 +1737,11 @@ function authErrorMessage(error2) {
 import { collection, onSnapshot as onSnapshot2 } from "firebase/firestore";
 var raw = {
   gifts: [],
-  privates: /* @__PURE__ */ new Map(),
-  // giftId -> { price }
   reservations: /* @__PURE__ */ new Map(),
   // giftId -> { uid, reservedAt }
   users: []
 };
-var ready = { gifts: false, privates: false, reservations: false, users: false };
+var ready = { gifts: false, reservations: false, users: false };
 var error = null;
 var stops = [];
 var listeners = /* @__PURE__ */ new Set();
@@ -1711,7 +1751,6 @@ function buildSnapshot() {
     const reservation = raw.reservations.get(g.id) ?? null;
     return {
       ...g,
-      price: raw.privates.get(g.id)?.price ?? null,
       reservedByUid: reservation?.uid ?? null,
       reservedAt: reservation?.reservedAt ?? null,
       reservedByName: reservation ? usersById.get(reservation.uid)?.name ?? "Compte supprim\xE9" : null
@@ -1729,12 +1768,12 @@ function emit() {
   const snapshot = buildSnapshot();
   listeners.forEach((fn) => fn(snapshot));
 }
-function listen(collectionName, key, onDocs) {
+function listen(name, onDocs) {
   return onSnapshot2(
-    collection(db, collectionName),
+    collection(db, name),
     (snap) => {
       onDocs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      ready[key] = true;
+      ready[name] = true;
       emit();
     },
     (err) => {
@@ -1743,20 +1782,22 @@ function listen(collectionName, key, onDocs) {
     }
   );
 }
-function startAdminStore() {
+function startAdminStore({ withReservations = false } = {}) {
   if (stops.length) return;
   stops = [
-    listen("gifts", "gifts", (docs) => raw.gifts = docs),
-    listen("giftsPrivate", "privates", (docs) => raw.privates = new Map(docs.map((d) => [d.id, d]))),
-    listen("reservations", "reservations", (docs) => raw.reservations = new Map(docs.map((d) => [d.id, d]))),
-    listen("users", "users", (docs) => raw.users = docs)
+    listen("gifts", (docs) => raw.gifts = docs),
+    listen("users", (docs) => raw.users = docs)
   ];
+  if (withReservations) {
+    stops.push(listen("reservations", (docs) => raw.reservations = new Map(docs.map((d) => [d.id, d]))));
+  } else {
+    ready.reservations = true;
+  }
 }
 function stopAdminStore() {
   stops.forEach((stop) => stop());
   stops = [];
   raw.gifts = [];
-  raw.privates = /* @__PURE__ */ new Map();
   raw.reservations = /* @__PURE__ */ new Map();
   raw.users = [];
   Object.keys(ready).forEach((k) => ready[k] = false);
@@ -1998,6 +2039,9 @@ function skeletonList(count = 3) {
   replaceContent(wrap, Array.from({ length: count }, () => h("div", { class: "skeleton" })));
   return wrap;
 }
+function surpriseNote() {
+  return h("p", { class: "note" }, icon("eye", 16), h("span", null, "Mode surprise : les statuts et les r\xE9servations sont masqu\xE9s pour que ton No\xEBl reste une surprise."));
+}
 
 // src/ui/account.js
 function openAccountModal(profile) {
@@ -2116,7 +2160,7 @@ function createGiftTag(gift, { mine = false, actions, stamped = false } = {}) {
       h(
         "footer",
         { class: "tag-foot" },
-        link ? h("a", { class: "tag-link", href: link, target: "_blank", rel: "noopener noreferrer" }, icon("link", 16), h("span", null, hostname(link) || "Voir le produit")) : h("span", { class: "tag-link tag-link--none" }, "Pas de lien"),
+        h("div", { class: "tag-linkrow" }, link ? h("a", { class: "tag-link", href: link, target: "_blank", rel: "noopener noreferrer" }, icon("link", 16), h("span", null, hostname(link) || "Voir le produit")) : h("span", { class: "tag-link tag-link--none" }, "Pas de lien"), priceNode(gift.price)),
         h("div", { class: "tag-actions" }, ...buildActions({ gift, status, mine, actions, stateNote }))
       )
     ),
@@ -2160,6 +2204,9 @@ function buildActions({ gift, status, mine, actions, stateNote }) {
     h("span", { class: "state-note" }, stateNote),
     actionButton("Pas encore achet\xE9", "btn--ghost", actions.unpurchased, gift.id, "undo")
   ];
+}
+function priceNode(price) {
+  return typeof price === "number" ? h("span", { class: "tag-price" }, formatPrice(price)) : h("span", { class: "tag-price tag-price--none" }, "Prix non pr\xE9cis\xE9");
 }
 
 // src/services/gifts.js
@@ -2314,7 +2361,7 @@ function wishlistPage(session2) {
     status.replaceChildren();
     const seen = /* @__PURE__ */ new Set();
     items.forEach((gift, index) => {
-      const signature = JSON.stringify([gift.title, gift.description, gift.purchaseLink, gift.image, gift.priority, gift.status, gift.mine]);
+      const signature = JSON.stringify([gift.title, gift.description, gift.purchaseLink, gift.image, gift.price, gift.priority, gift.status, gift.mine]);
       let entry = cache.get(gift.id);
       if (!entry || entry.signature !== signature) {
         const el2 = createGiftTag(gift, { mine: gift.mine, actions, stamped: stampedNext.delete(gift.id) });
@@ -2373,7 +2420,8 @@ function wishlistPage(session2) {
 // src/pages/admin/dashboard.js
 var panel = (title, ...children) => h("section", { class: "panel" }, h("h2", { class: "panel-title" }, title), ...children);
 var sum = (gifts) => gifts.reduce((total, g) => total + (typeof g.price === "number" ? g.price : 0), 0);
-function dashboardPage() {
+function dashboardPage(session2) {
+  const spoilerFree = session2.profile.role === "editor";
   const root2 = h("div", { class: "admin-content" }, skeletonList(3));
   const stop = subscribeAdmin((snapshot) => {
     if (snapshot.error) {
@@ -2381,11 +2429,11 @@ function dashboardPage() {
       return;
     }
     if (!snapshot.loaded) return;
-    replaceContent(root2, ...render(snapshot));
+    replaceContent(root2, ...render(snapshot, spoilerFree));
   });
   return { el: root2, destroy: stop };
 }
-function render({ gifts, users, usersById }) {
+function render({ gifts, users, usersById }, spoilerFree) {
   const by = (status) => gifts.filter((g) => g.status === status);
   const available = by("available");
   const reserved = by("reserved");
@@ -2403,7 +2451,7 @@ function render({ gifts, users, usersById }) {
       "div",
       { class: "overview" },
       h("p", { class: "big-number" }, String(total), h("span", null, total > 1 ? "cadeaux" : "cadeau")),
-      total ? h(
+      spoilerFree ? h("p", { class: "muted" }, total ? "Les statuts sont masqu\xE9s en mode surprise." : "Aucun cadeau pour l\u2019instant. Ajoute le premier depuis l\u2019onglet Cadeaux.") : total ? h(
         "div",
         { class: "overview-bar" },
         h(
@@ -2419,18 +2467,19 @@ function render({ gifts, users, usersById }) {
       ) : h("p", { class: "muted" }, "Aucun cadeau pour l\u2019instant. Ajoute le premier depuis l\u2019onglet Cadeaux.")
     )
   );
+  const unpriced = gifts.filter((g) => g.price == null).length;
   const budget = panel(
     "Budget",
     h(
       "dl",
       { class: "figures" },
       figure("Valeur de la liste", formatPrice(sum(gifts))),
-      figure("D\xE9j\xE0 pris (r\xE9serv\xE9 ou achet\xE9)", formatPrice(sum(taken))),
-      figure("Reste \xE0 prendre", formatPrice(sum(available)))
+      spoilerFree ? null : figure("D\xE9j\xE0 pris (r\xE9serv\xE9 ou achet\xE9)", formatPrice(sum(taken))),
+      spoilerFree ? null : figure("Reste \xE0 prendre", formatPrice(sum(available)))
     ),
-    gifts.some((g) => g.price == null) ? h("p", { class: "muted small" }, `${plural(gifts.filter((g) => g.price == null).length, "cadeau n\u2019a", "cadeaux n\u2019ont")} pas de prix : ils ne sont pas compt\xE9s.`) : null
+    unpriced ? h("p", { class: "muted small" }, `${plural(unpriced, "cadeau n\u2019a", "cadeaux n\u2019ont")} pas de prix : ${unpriced > 1 ? "ils ne sont" : "il n\u2019est"} pas compt\xE9${unpriced > 1 ? "s" : ""}.`) : null
   );
-  const people = users.filter((u) => u.role !== "admin").map((u) => ({
+  const people = users.filter((u) => u.role === "user").map((u) => ({
     user: u,
     visible: gifts.filter((g) => g.visibleTo?.includes(u.id)).length,
     reserved: gifts.filter((g) => g.reservedByUid === u.id).length
@@ -2440,18 +2489,18 @@ function render({ gifts, users, usersById }) {
     people.length ? h(
       "table",
       { class: "table table--compact" },
-      h("thead", null, h("tr", null, h("th", null, "Personne"), h("th", { class: "num" }, "Voit"), h("th", { class: "num" }, "A r\xE9serv\xE9"))),
+      h("thead", null, h("tr", null, h("th", null, "Personne"), h("th", { class: "num" }, "Voit"), spoilerFree ? null : h("th", { class: "num" }, "A r\xE9serv\xE9"))),
       h(
         "tbody",
         null,
         people.map(
-          ({ user, visible, reserved: count }) => h("tr", null, h("td", null, user.name, user.active ? null : h("span", { class: "badge badge--off" }, "d\xE9sactiv\xE9")), h("td", { class: "num" }, String(visible)), h("td", { class: "num" }, String(count)))
+          ({ user, visible, reserved: count }) => h("tr", null, h("td", null, user.name, user.active ? null : h("span", { class: "badge badge--off" }, "d\xE9sactiv\xE9")), h("td", { class: "num" }, String(visible)), spoilerFree ? null : h("td", { class: "num" }, String(count)))
         )
       )
     ) : h("p", { class: "muted" }, "Aucune personne pour l\u2019instant. Cr\xE9e les comptes dans l\u2019onglet Personnes.")
   );
   const recent = gifts.filter((g) => g.reservedByUid).sort((a, b) => (b.reservedAt?.toMillis?.() ?? 0) - (a.reservedAt?.toMillis?.() ?? 0)).slice(0, 6);
-  const activity = panel(
+  const activity = spoilerFree ? null : panel(
     "Derni\xE8res r\xE9servations",
     recent.length ? h(
       "ul",
@@ -2471,10 +2520,12 @@ function render({ gifts, users, usersById }) {
   const alerts = [];
   const nobody = gifts.filter((g) => !g.visibleTo?.length);
   if (nobody.length) alerts.push(`${plural(nobody.length, "cadeau n\u2019est visible", "cadeaux ne sont visibles")} par personne : ${nobody.slice(0, 3).map((g) => g.title).join(", ")}${nobody.length > 3 ? "\u2026" : ""}`);
-  const urgent = available.filter((g) => g.priority === "high");
-  if (urgent.length) alerts.push(`${plural(urgent.length, "cadeau prioritaire est", "cadeaux prioritaires sont")} encore disponible${urgent.length > 1 ? "s" : ""} : ${urgent.slice(0, 3).map((g) => g.title).join(", ")}${urgent.length > 3 ? "\u2026" : ""}`);
-  const orphans = gifts.filter((g) => g.reservedByUid && !usersById.has(g.reservedByUid));
-  if (orphans.length) alerts.push(`${plural(orphans.length, "r\xE9servation appartient", "r\xE9servations appartiennent")} \xE0 un compte supprim\xE9.`);
+  if (!spoilerFree) {
+    const urgent = available.filter((g) => g.priority === "high");
+    if (urgent.length) alerts.push(`${plural(urgent.length, "cadeau prioritaire est", "cadeaux prioritaires sont")} encore disponible${urgent.length > 1 ? "s" : ""} : ${urgent.slice(0, 3).map((g) => g.title).join(", ")}${urgent.length > 3 ? "\u2026" : ""}`);
+    const orphans = gifts.filter((g) => g.reservedByUid && !usersById.has(g.reservedByUid));
+    if (orphans.length) alerts.push(`${plural(orphans.length, "r\xE9servation appartient", "r\xE9servations appartiennent")} \xE0 un compte supprim\xE9.`);
+  }
   const watch = alerts.length ? panel("\xC0 surveiller", h("ul", { class: "alerts" }, alerts.map((a) => h("li", null, a)))) : null;
   return [overview, h("div", { class: "grid-2" }, budget, perPerson), h("div", { class: "grid-2" }, activity, watch)];
 }
@@ -2498,31 +2549,27 @@ import { createUserWithEmailAndPassword, sendPasswordResetEmail, signOut as sign
 async function saveGift(gift) {
   const ref = gift.id ? doc3(db, "gifts", gift.id) : doc3(collection3(db, "gifts"));
   const batch = writeBatch2(db);
-  const publicPart = {
+  const data = {
     title: gift.title.trim(),
     description: (gift.description ?? "").trim(),
     purchaseLink: safeUrl(gift.purchaseLink),
     image: safeUrl(gift.image),
+    price: parsePrice(gift.price),
     priority: gift.priority || null,
-    status: gift.status,
     visibleTo: [...new Set(gift.visibleTo ?? [])],
     updatedAt: serverTimestamp2()
   };
-  if (!gift.id) publicPart.createdAt = serverTimestamp2();
-  batch.set(ref, publicPart, { merge: true });
-  batch.set(
-    doc3(db, "giftsPrivate", ref.id),
-    { price: parsePrice(gift.price), updatedAt: serverTimestamp2() },
-    { merge: true }
-  );
-  if (publicPart.status === "available") batch.delete(doc3(db, "reservations", ref.id));
+  if (gift.status) data.status = gift.status;
+  else if (!gift.id) data.status = "available";
+  if (!gift.id) data.createdAt = serverTimestamp2();
+  batch.set(ref, data, { merge: true });
+  if (data.status === "available") batch.delete(doc3(db, "reservations", ref.id));
   await batch.commit();
   return ref.id;
 }
 async function deleteGift(id) {
   const batch = writeBatch2(db);
   batch.delete(doc3(db, "gifts", id));
-  batch.delete(doc3(db, "giftsPrivate", id));
   batch.delete(doc3(db, "reservations", id));
   await batch.commit();
 }
@@ -2591,7 +2638,8 @@ function sendResetEmail(email) {
 }
 
 // src/pages/admin/gifts.js
-function giftsPage() {
+function giftsPage(session2) {
+  const spoilerFree = session2.profile.role === "editor";
   let snapshot = null;
   let search = "";
   let statusFilter = "all";
@@ -2632,12 +2680,12 @@ function giftsPage() {
     );
     replaceContent(
       toolbar,
-      h("div", { class: "toolbar-filters" }, searchInput, statusSelect, personSelect),
+      h("div", { class: "toolbar-filters" }, searchInput, spoilerFree ? null : statusSelect, personSelect),
       h(
         "div",
         { class: "toolbar-actions" },
         h("button", { class: "btn btn--ghost", type: "button", onClick: () => openImportModal(snapshot) }, icon("upload", 16), h("span", null, "Importer")),
-        h("button", { class: "btn btn--primary", type: "button", onClick: () => openGiftModal(snapshot, null) }, icon("plus", 16), h("span", null, "Nouveau cadeau"))
+        h("button", { class: "btn btn--primary", type: "button", onClick: () => openGiftModal(snapshot, null, spoilerFree) }, icon("plus", 16), h("span", null, "Nouveau cadeau"))
       )
     );
   }
@@ -2655,7 +2703,7 @@ function giftsPage() {
       );
       return;
     }
-    replaceContent(list, items.map((g) => row(g, snapshot)));
+    replaceContent(list, items.map((g) => row(g, snapshot, spoilerFree)));
   }
   const stop = subscribeAdmin((s) => {
     const firstLoad = !snapshot?.loaded && s.loaded;
@@ -2673,7 +2721,7 @@ function giftsPage() {
   });
   return { el: h("div", { class: "admin-content" }, toolbar, list), destroy: stop };
 }
-function row(gift, snapshot) {
+function row(gift, snapshot, spoilerFree) {
   const image = safeUrl(gift.image);
   const link = safeUrl(gift.purchaseLink);
   const names = (gift.visibleTo ?? []).map((uid) => snapshot.usersById.get(uid)?.name).filter(Boolean);
@@ -2697,14 +2745,16 @@ function row(gift, snapshot) {
     h(
       "div",
       { class: "row-status" },
-      h("span", { class: `badge badge--${gift.status}` }, STATUS[gift.status]?.label ?? gift.status),
-      gift.status !== "available" ? h("span", { class: "row-by" }, gift.reservedByName ? `par ${gift.reservedByName}` : "sans nom") : null
+      ...spoilerFree ? [] : [
+        h("span", { class: `badge badge--${gift.status}` }, STATUS[gift.status]?.label ?? gift.status),
+        gift.status !== "available" ? h("span", { class: "row-by" }, gift.reservedByName ? `par ${gift.reservedByName}` : "sans nom") : null
+      ]
     ),
     h(
       "div",
       { class: "row-actions" },
-      gift.status !== "available" ? h("button", { class: "icon-btn", type: "button", title: "Lib\xE9rer la r\xE9servation", "aria-label": "Lib\xE9rer la r\xE9servation", onClick: () => release(gift) }, icon("undo")) : null,
-      h("button", { class: "icon-btn", type: "button", title: "Modifier", "aria-label": `Modifier ${gift.title}`, onClick: () => openGiftModal(snapshot, gift) }, icon("edit")),
+      !spoilerFree && gift.status !== "available" ? h("button", { class: "icon-btn", type: "button", title: "Lib\xE9rer la r\xE9servation", "aria-label": "Lib\xE9rer la r\xE9servation", onClick: () => release(gift) }, icon("undo")) : null,
+      h("button", { class: "icon-btn", type: "button", title: "Modifier", "aria-label": `Modifier ${gift.title}`, onClick: () => openGiftModal(snapshot, gift, spoilerFree) }, icon("edit")),
       h("button", { class: "icon-btn icon-btn--danger", type: "button", title: "Supprimer", "aria-label": `Supprimer ${gift.title}`, onClick: () => remove(gift) }, icon("trash"))
     )
   );
@@ -2766,7 +2816,7 @@ function peoplePicker(users, selected) {
     get: () => people.map((u) => u.id).filter((id) => checked.has(id))
   };
 }
-function openGiftModal(snapshot, gift) {
+function openGiftModal(snapshot, gift, spoilerFree) {
   const editing = Boolean(gift);
   const field = (label, control, hint) => h("label", { class: "field" }, h("span", { class: "field-label" }, label), control, hint ? h("span", { class: "field-hint" }, hint) : null);
   const title = h("input", { class: "input", required: true, maxlength: 120, value: gift?.title ?? "" });
@@ -2795,9 +2845,9 @@ function openGiftModal(snapshot, gift) {
     field("Titre", title),
     field("Description", description),
     field("Lien d\u2019achat", link),
-    h("div", { class: "grid-fields" }, field("Prix", price, "Visible uniquement par toi"), field("Priorit\xE9", priority)),
+    h("div", { class: "grid-fields" }, field("Prix", price, "Affich\xE9 sur le cadeau, pour toi et pour les personnes qui le voient"), field("Priorit\xE9", priority)),
     field("Image", image, "Adresse d\u2019une image du produit (clic droit \u203A copier l\u2019adresse de l\u2019image)"),
-    field("Statut", status, gift?.reservedByName ? `R\xE9serv\xE9 par ${gift.reservedByName}. Repasser en \xAB Disponible \xBB annule sa r\xE9servation.` : null),
+    spoilerFree ? null : field("Statut", status, gift?.reservedByName ? `R\xE9serv\xE9 par ${gift.reservedByName}. Repasser en \xAB Disponible \xBB annule sa r\xE9servation.` : null),
     h("fieldset", { class: "fieldset" }, h("legend", { class: "field-label" }, "Qui peut voir ce cadeau ?"), picker.el),
     error2,
     h("div", { class: "form-actions" }, submit)
@@ -2819,7 +2869,7 @@ function openGiftModal(snapshot, gift) {
           price: price.value,
           image: image.value,
           priority: priority.value,
-          status: status.value,
+          status: spoilerFree ? void 0 : status.value,
           visibleTo: picker.get()
         })
       );
@@ -2878,6 +2928,10 @@ function openImportModal(snapshot) {
 var USERNAME_RE = /^[a-z0-9._-]{3,30}$/;
 function usersPage(session2) {
   const myId = session2.profile.id;
+  const myRole = session2.profile.role;
+  const spoilerFree = myRole === "editor";
+  const canManage = (u) => myRole === "admin" || u.role === "user";
+  const allowedRoles = () => Object.entries(ROLES).filter(([id]) => myRole === "admin" || id === "user");
   let snapshot = null;
   const list = h("div", { class: "rows" }, skeletonList(3));
   const toolbar = h(
@@ -2916,7 +2970,7 @@ function usersPage(session2) {
           { class: "row-title" },
           user.name,
           self ? h("span", { class: "badge" }, "toi") : null,
-          user.role === "admin" ? h("span", { class: "badge badge--admin" }, ROLES.admin) : null,
+          user.role !== "user" ? h("span", { class: "badge badge--admin" }, ROLES[user.role] ?? user.role) : null,
           user.active ? null : h("span", { class: "badge badge--off" }, "D\xE9sactiv\xE9")
         ),
         h("p", { class: "row-meta" }, h("span", null, isPseudoEmail(user.email) ? `Identifiant : ${user.username ?? user.email}` : user.email))
@@ -2925,14 +2979,14 @@ function usersPage(session2) {
         "div",
         { class: "row-price" },
         h("span", { class: "row-price-label" }, "Voit"),
-        user.role === "admin" ? "Tout" : plural(visible, "cadeau", "cadeaux")
+        user.role !== "user" ? "Tout" : plural(visible, "cadeau", "cadeaux")
       ),
-      h("div", { class: "row-status" }, user.role === "admin" ? null : h("span", { class: "row-by" }, `${plural(reserved, "r\xE9servation", "r\xE9servations")}`)),
+      h("div", { class: "row-status" }, user.role !== "user" || spoilerFree ? null : h("span", { class: "row-by" }, `${plural(reserved, "r\xE9servation", "r\xE9servations")}`)),
       h(
         "div",
         { class: "row-actions" },
-        h("button", { class: "btn btn--sm btn--ghost", type: "button", onClick: () => openEditModal(user, s, self) }, icon("edit", 16), h("span", null, "Modifier")),
-        self ? null : h(
+        canManage(user) ? h("button", { class: "btn btn--sm btn--ghost", type: "button", onClick: () => openEditModal(user, s, self) }, icon("edit", 16), h("span", null, "Modifier")) : null,
+        self || !canManage(user) ? null : h(
           "button",
           { class: `btn btn--sm ${user.active ? "btn--ghost" : "btn--pine"}`, type: "button", onClick: () => toggleActive(user) },
           icon(user.active ? "ban" : "check", 16),
@@ -2953,7 +3007,7 @@ function usersPage(session2) {
     const name = h("input", { class: "input", required: true, maxlength: 60, placeholder: "Maman" });
     const username = h("input", { class: "input", required: true, autocapitalize: "none", spellcheck: "false", placeholder: "maman" });
     const password = h("input", { class: "input", required: true, minlength: 6, autocomplete: "off", value: randomPassword() });
-    const role = h("select", { class: "select" }, Object.entries(ROLES).map(([id, label]) => h("option", { value: id }, label)));
+    const role = h("select", { class: "select" }, allowedRoles().map(([id, label]) => h("option", { value: id }, label)));
     const error2 = h("p", { class: "form-error", role: "alert", hidden: true });
     const submit = h("button", { class: "btn btn--primary", type: "submit" }, "Cr\xE9er le compte");
     const form = h(
@@ -3012,7 +3066,7 @@ Mot de passe : ${password}`;
   }
   function openEditModal(user, s, self) {
     const name = h("input", { class: "input", required: true, maxlength: 60, value: user.name });
-    const role = h("select", { class: "select", disabled: self }, Object.entries(ROLES).map(([id, label]) => h("option", { value: id, selected: id === user.role }, label)));
+    const role = h("select", { class: "select", disabled: self }, allowedRoles().map(([id, label]) => h("option", { value: id, selected: id === user.role }, label)));
     const active = h("input", { type: "checkbox", checked: user.active, disabled: self });
     const error2 = h("p", { class: "form-error", role: "alert", hidden: true });
     const submit = h("button", { class: "btn btn--primary", type: "submit" }, "Enregistrer");
@@ -3021,7 +3075,7 @@ Mot de passe : ${password}`;
     const giftChecks = s.gifts.slice().sort((a, b) => a.title.localeCompare(b.title, "fr")).map((g) => {
       const input = h("input", { type: "checkbox", checked: owned.has(g.id) });
       input.addEventListener("change", () => input.checked ? wanted.add(g.id) : wanted.delete(g.id));
-      return h("label", { class: "check" }, input, h("span", null, g.title));
+      return h("label", { class: "check" }, input, h("span", null, typeof g.price === "number" ? `${g.title} \xB7 ${formatPrice(g.price)}` : g.title));
     });
     const canReset = !isPseudoEmail(user.email) && !self;
     const form = h(
@@ -3031,7 +3085,7 @@ Mot de passe : ${password}`;
       h("p", { class: "muted small" }, isPseudoEmail(user.email) ? `Identifiant : ${user.username ?? user.email}` : `E-mail : ${user.email}`),
       h("label", { class: "field" }, h("span", { class: "field-label" }, "R\xF4le"), role),
       h("label", { class: "check check--switch" }, active, h("span", null, "Compte actif"), self ? h("span", { class: "field-hint" }, "Tu ne peux pas d\xE9sactiver ton propre compte.") : null),
-      user.role === "admin" ? h("p", { class: "muted" }, "Un administrateur voit tous les cadeaux.") : h("fieldset", { class: "fieldset" }, h("legend", { class: "field-label" }, "Cadeaux visibles par cette personne"), s.gifts.length ? h("div", { class: "checks-list checks-list--tall" }, giftChecks) : h("p", { class: "muted" }, "Aucun cadeau pour l\u2019instant.")),
+      user.role !== "user" ? h("p", { class: "muted" }, "Ce compte voit tous les cadeaux.") : h("fieldset", { class: "fieldset" }, h("legend", { class: "field-label" }, "Cadeaux visibles par cette personne"), s.gifts.length ? h("div", { class: "checks-list checks-list--tall" }, giftChecks) : h("p", { class: "muted" }, "Aucun cadeau pour l\u2019instant.")),
       canReset ? h("button", { class: "btn btn--ghost", type: "button", onClick: async (e) => {
         try {
           await withBusy(e.currentTarget, () => sendResetEmail(user.email));
@@ -3050,7 +3104,7 @@ Mot de passe : ${password}`;
       try {
         await withBusy(submit, async () => {
           await updateUserProfile(user.id, { name: name.value, role: self ? void 0 : role.value, active: self ? void 0 : active.checked });
-          if (user.role !== "admin") {
+          if (user.role === "user") {
             const add = [...wanted].filter((id) => !owned.has(id));
             const remove2 = [...owned].filter((id) => !wanted.has(id));
             if (add.length || remove2.length) await setUserGiftAccess(user.id, { add, remove: remove2 });
@@ -3081,6 +3135,7 @@ var ADMIN_PAGES = {
 };
 var session = { status: "loading" };
 var current = null;
+var storeMode = null;
 var sessionKey = (s) => [s.status, s.user?.uid, s.profile?.role, s.profile?.name, s.reason].join("|");
 var currentPath = () => location.hash.replace(/^#/, "").split("?")[0] || "/";
 var go = (path) => location.replace(`#${path}`);
@@ -3102,13 +3157,13 @@ function render2() {
     case "blocked":
       return mount(blockedPage(session, () => logout()));
     case "ready": {
-      const isAdmin = session.profile.role === "admin";
-      if (path === "/login") return go(isAdmin ? "/admin" : "/");
-      if (isAdmin) {
+      const isManager = MANAGER_ROLES.includes(session.profile.role);
+      if (path === "/login") return go(isManager ? "/admin" : "/");
+      if (isManager) {
         const build = ADMIN_PAGES[path];
         if (!build) return go("/admin");
         const inner = build(session);
-        const el = h("div", { class: "page page--admin" }, topbar(session, { nav: ADMIN_NAV, active: path, home: "#/admin" }), h("main", { class: "wrap wrap--admin" }, inner.el));
+        const el = h("div", { class: "page page--admin" }, topbar(session, { nav: ADMIN_NAV, active: path, home: "#/admin" }), h("main", { class: "wrap wrap--admin" }, session.profile.role === "editor" ? surpriseNote() : null, inner.el));
         return mount({ el, destroy: inner.destroy });
       }
       if (path !== "/") return go("/");
@@ -3118,11 +3173,13 @@ function render2() {
 }
 watchSession((next) => {
   const changed = sessionKey(next) !== sessionKey(session);
-  const wasAdmin = session.status === "ready" && session.profile.role === "admin";
   session = next;
-  const isAdmin = next.status === "ready" && next.profile.role === "admin";
-  if (isAdmin && !wasAdmin) startAdminStore();
-  if (!isAdmin && wasAdmin) stopAdminStore();
+  const mode = next.status === "ready" && MANAGER_ROLES.includes(next.profile.role) ? next.profile.role : null;
+  if (mode !== storeMode) {
+    if (storeMode) stopAdminStore();
+    if (mode) startAdminStore({ withReservations: mode === "admin" });
+    storeMode = mode;
+  }
   if (changed || !current) render2();
 });
 window.addEventListener("hashchange", render2);
